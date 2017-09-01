@@ -25,10 +25,6 @@ func GetIfaceIP4Addr(iface *net.Interface) (net.IP, error) {
 	return nil, errors.New("GetIfaceIP4Addr not implemented for this platform")
 }
 
-func GetIfaceIP4AddrMatch(iface *net.Interface, matchAddr net.IP) error {
-	return errors.New("GetIfaceIP4AddrMatch not implemented for this platform")
-}
-
 func GetDefaultGatewayIface() (*net.Interface, error) {
 	return nil, errors.New("GetDefaultGatewayIface not implemented for this platform")
 }
