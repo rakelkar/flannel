@@ -42,13 +42,6 @@ type vxlanDeviceAttrs struct {
 	gbp       bool
 }
 
-// HACK from vxlan_network.go
-type vxlanLeaseAttrs struct {
-	VtepMAC hardwareAddr
-}
-
-
-
 const (
 	defaultVNI = 1
 )
