@@ -19,29 +19,52 @@ package ip
 import (
 	"errors"
 	"net"
-
-	log "github.com/golang/glog"
+	"github.com/rakelkar/gonetsh"
 )
 
 func GetIfaceIP4Addr(iface *net.Interface) (net.IP, error) {
 	// TODO: need to implement this
 	// get ip address for the interface
-	// prefer global unicast but if no global found, fallback to link local unicast address 
-	mockAddr := net.IPv4(192, 168, 10, 100)
-	log.Infof("MOCK: returning %v for interface %v", mockAddr.String(), iface.Name)
-	return mockAddr, nil 
+	// prefer global unicast to link local addresses
+	netHelper := netsh.New(nil)
+	ifaceDetails, err := netHelper.GetInterfaceByName(iface.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	ifAddr := net.ParseIP(ifaceDetails.IpAddress)
+
+	return ifAddr, nil
 }
 
 func GetDefaultGatewayIface() (*net.Interface, error) {
-	// TODO: need to implement this
-	// this is used by main.go when the user does not explicitly select an iface
-	// for linux the logic is to find the interface that is used by the default gw route
+	netHelper := netsh.New(nil)
 
-	return nil, errors.New("GetDefaultGatewayIface not implemented for this platform")
+	defaultIfaceName, err := netHelper.GetDefaultGatewayIfaceName()
+	if err != nil {
+		return nil, err
+	}
+
+	iface, err := net.InterfaceByName(defaultIfaceName)
+	if err != nil {
+		return nil, err
+	}
+
+	return iface, nil
 }
 
 func GetInterfaceByIP(ip net.IP) (*net.Interface, error) {
-	// TODO: need to implement this
-	// find interface by ip address
-	return nil, errors.New("GetInterfaceByIP not implemented for this platform")
+	netHelper := netsh.New(nil)
+
+	ifaceDetails, err := netHelper.GetInterfaceByIP(ip.String())
+	if err != nil {
+		return nil, err
+	}
+
+	iface, err := net.InterfaceByName(ifaceDetails.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return iface, nil
 }
