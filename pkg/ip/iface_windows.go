@@ -17,7 +17,6 @@
 package ip
 
 import (
-	"errors"
 	"net"
 	"github.com/rakelkar/gonetsh"
 )
