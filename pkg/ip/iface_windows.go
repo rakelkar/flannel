@@ -17,37 +17,22 @@
 package ip
 
 import (
+	"errors"
 	"net"
-
-	log "github.com/golang/glog"
 )
 
 func GetIfaceIP4Addr(iface *net.Interface) (net.IP, error) {
-	// get ip address for the interface
-	// prefer global unicast to link local addresses
-	mockAddr := net.IPv4(192, 168, 10, 100)
-	log.Infof("MOCK: returning %v for interface %v", mockAddr.String(), iface.Name)
-	return mockAddr, nil 
+	return nil, errors.New("GetIfaceIP4Addr not implemented for this platform")
+}
+
+func GetIfaceIP4AddrMatch(iface *net.Interface, matchAddr net.IP) error {
+	return errors.New("GetIfaceIP4AddrMatch not implemented for this platform")
 }
 
 func GetDefaultGatewayIface() (*net.Interface, error) {
-	iface, err := net.InterfaceByName("Wi-Fi")
-	if err != nil {
-		log.Error("MOCK: failed to get wifi interface as Default Gateway")
-		return nil, err
-	}
-
-	log.Infof("MOCK: returning [%v] as default gateway", iface.Name)
-	return iface, nil
+	return nil, errors.New("GetDefaultGatewayIface not implemented for this platform")
 }
 
 func GetInterfaceByIP(ip net.IP) (*net.Interface, error) {
-	iface, err := net.InterfaceByName("Wi-Fi")
-	if err != nil {	
-		log.Errorf("MOCK: failed to get wifi interface for ip %v", ip.String())
-		return nil, err
-	}
-
-	log.Infof("MOCK: returning [%v] as inteface for [%v]", iface.Name, ip.String())
-	return iface, nil
+	return nil, errors.New("GetInterfaceByIP not implemented for this platform")
 }
