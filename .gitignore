@@ -9,3 +9,5 @@ cover.out
 .editorconfig
 .idea/
 
+default.etcd/
+flannel.exe
