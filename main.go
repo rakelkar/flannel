@@ -80,6 +80,7 @@ type CmdLineOpts struct {
 	kubeSubnetMgr          bool
 	kubeApiUrl             string
 	kubeConfigFile         string
+	kubeNetConfPath        string
 	iface                  flagSlice
 	ifaceRegex             flagSlice
 	ipMasq                 bool
@@ -115,6 +116,7 @@ func init() {
 	flannelFlags.BoolVar(&opts.kubeSubnetMgr, "kube-subnet-mgr", false, "contact the Kubernetes API for subnet assignment instead of etcd.")
 	flannelFlags.StringVar(&opts.kubeApiUrl, "kube-api-url", "", "Kubernetes API server URL. Does not need to be specified if flannel is running in a pod.")
 	flannelFlags.StringVar(&opts.kubeConfigFile, "kubeconfig-file", "", "kubeconfig file location. Does not need to be specified if flannel is running in a pod.")
+	flannelFlags.StringVar(&opts.kubeNetConfPath, "kube-netconf-path", "", "kube network config path. Defaults to /etc/kube-flannel/net-conf.json. Does not need to be specified if flannel is running in a pod.")
 	flannelFlags.BoolVar(&opts.version, "version", false, "print version and exit")
 	flannelFlags.StringVar(&opts.healthzIP, "healthz-ip", "0.0.0.0", "the IP address for healthz server to listen")
 	flannelFlags.IntVar(&opts.healthzPort, "healthz-port", 0, "the port for healthz server to listen(0 to disable)")
@@ -147,7 +149,7 @@ func usage() {
 
 func newSubnetManager() (subnet.Manager, error) {
 	if opts.kubeSubnetMgr {
-		return kube.NewSubnetManager(opts.kubeApiUrl, opts.kubeConfigFile)
+		return kube.NewSubnetManager(opts.kubeApiUrl, opts.kubeConfigFile, opts.kubeNetConfPath)
 	}
 
 	cfg := &etcdv2.EtcdConfig{
