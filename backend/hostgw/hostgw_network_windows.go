@@ -128,11 +128,11 @@ func (n *network) handleSubnetEvents(batch []subnet.Event) {
 				linkIndex: n.linkIndex,
 			}
 
-			getRouteCmdLine := fmt.Sprint("get-netroute -InterfaceIndex %v -DestinationPrefix %v -erroraction Ignore", route.linkIndex, route.destinationSubnet.String())
+			getRouteCmdLine := fmt.Sprintf("get-netroute -InterfaceIndex %v -DestinationPrefix %v -erroraction Ignore", route.linkIndex, route.destinationSubnet.String())
 			stdout := runScript(getRouteCmdLine)
 
 			if stdout == "" {
-				newRouteCmdLine := fmt.Sprint("new-netroute -InterfaceIndex %v -DestinationPrefix %v -NextHop  %v -Verbose", route.linkIndex, route.destinationSubnet.String(), route.gatewayAddress.String())
+				newRouteCmdLine := fmt.Sprintf("new-netroute -InterfaceIndex %v -DestinationPrefix %v -NextHop  %v -Verbose", route.linkIndex, route.destinationSubnet.String(), route.gatewayAddress.String())
 				runScript(newRouteCmdLine)
 			}
 

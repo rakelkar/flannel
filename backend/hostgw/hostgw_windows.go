@@ -57,6 +57,8 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	n := &network{
 		extIface: be.extIface,
 		sm:       be.sm,
+		name:     be.extIface.Iface.Name,
+		linkIndex:     be.extIface.Iface.Index,
 	}
 
 	attrs := subnet.LeaseAttrs{
@@ -77,6 +79,5 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	}
 
 	/* NB: docker will create the local route to `sn` */
-
 	return n, nil
 }
