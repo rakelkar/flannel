@@ -68,15 +68,10 @@ type kubeSubnetManager struct {
 	events         chan subnet.Event
 }
 
-func NewSubnetManager(apiUrl, kubeconfig, kubeNetConfPath string) (subnet.Manager, error) {
+func NewSubnetManager(apiUrl, kubeconfig string) (subnet.Manager, error) {
 
 	var cfg *rest.Config
 	var err error
-
-	if kubeNetConfPath == "" {
-		kubeNetConfPath = netConfPath
-	}
-
 	// Use out of cluster config if the URL or kubeconfig have been specified. Otherwise use incluster config.
 	if apiUrl != "" || kubeconfig != "" {
 		cfg, err = clientcmd.BuildConfigFromFlags(apiUrl, kubeconfig)
@@ -116,7 +111,7 @@ func NewSubnetManager(apiUrl, kubeconfig, kubeNetConfPath string) (subnet.Manage
 		}
 	}
 
-	netConf, err := ioutil.ReadFile(kubeNetConfPath)
+	netConf, err := ioutil.ReadFile(netConfPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read net conf: %v", err)
 	}
