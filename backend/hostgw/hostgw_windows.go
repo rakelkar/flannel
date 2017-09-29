@@ -55,10 +55,10 @@ func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backen
 
 func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Config) (backend.Network, error) {
 	n := &network{
-		extIface: be.extIface,
-		sm:       be.sm,
-		name:     be.extIface.Iface.Name,
-		linkIndex:     be.extIface.Iface.Index,
+		extIface:  be.extIface,
+		sm:        be.sm,
+		name:      be.extIface.Iface.Name,
+		linkIndex: be.extIface.Iface.Index,
 	}
 
 	attrs := subnet.LeaseAttrs{
