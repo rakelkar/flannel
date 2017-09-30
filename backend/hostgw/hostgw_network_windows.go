@@ -17,7 +17,6 @@
 package hostgw
 
 import (
-	"net"
 	"sync"
 	"time"
 
@@ -27,32 +26,16 @@ import (
 	"github.com/coreos/flannel/backend"
 	"github.com/coreos/flannel/subnet"
 
-	ps "github.com/gorillalabs/go-powershell"
-	psbe "github.com/gorillalabs/go-powershell/backend"
-
-	"fmt"
-	"regexp"
-	"strings"
-	"bytes"
-	"bufio"
-	"strconv"
+	netroute "github.com/rakelkar/gonetsh/netroute"
 )
 
 type network struct {
 	name      string
 	extIface  *backend.ExternalInterface
 	linkIndex int
-	rl        []route
+	rl        []netroute.Route
 	lease     *subnet.Lease
 	sm        subnet.Manager
-}
-
-type route struct {
-	linkIndex         int
-	destinationSubnet *net.IPNet
-	gatewayAddress    net.IP
-	routeMetric       int
-	ifMetric          int
 }
 
 func (n *network) Lease() *subnet.Lease {
@@ -74,7 +57,7 @@ func (n *network) Run(ctx context.Context) {
 		wg.Done()
 	}()
 
-	n.rl = make([]route, 0, 10)
+	n.rl = make([]netroute.Route, 0, 10)
 	wg.Add(1)
 	go func() {
 		n.routeCheck(ctx)
@@ -94,6 +77,9 @@ func (n *network) Run(ctx context.Context) {
 	}
 }
 func (n *network) handleSubnetEvents(batch []subnet.Event) {
+	nr := netroute.New()
+	defer nr.Exit()
+
 	for _, evt := range batch {
 		switch evt.Type {
 		case subnet.EventAdded:
@@ -104,32 +90,28 @@ func (n *network) handleSubnetEvents(batch []subnet.Event) {
 				continue
 			}
 
-			route := route{
-				destinationSubnet: evt.Lease.Subnet.ToIPNet(),
-				gatewayAddress:    evt.Lease.Attrs.PublicIP.ToIP(),
-				linkIndex:         n.linkIndex,
+			route := netroute.Route{
+				DestinationSubnet: evt.Lease.Subnet.ToIPNet(),
+				GatewayAddress:    evt.Lease.Attrs.PublicIP.ToIP(),
+				LinkIndex:         n.linkIndex,
 			}
 
-			getRouteCmdLine := fmt.Sprintf("get-netroute -InterfaceIndex %v -DestinationPrefix %v -erroraction Ignore", route.linkIndex, route.destinationSubnet.String())
-			stdout, _ := runScript(getRouteCmdLine)
+			existingRoutes, _ := nr.GetNetRoutes(route.LinkIndex, route.DestinationSubnet)
 
-			existingRoutes := parseRoutesList(stdout)
-			if len(existingRoutes) > 0 {
-				if routeEqual(existingRoutes[0], route) {
+			if existingRoutes != nil && len(existingRoutes) > 0 {
+				if existingRoutes[0].Equal(route) {
 					continue
 				}
 
-				log.Warningf("Replacing existing route to %v via %v with %v via %v.", evt.Lease.Subnet, existingRoutes[0].gatewayAddress, evt.Lease.Subnet, evt.Lease.Attrs.PublicIP)
-				removeRouteCmdLine := fmt.Sprint("remove-netroute -InterfaceIndex %v -DestinationPrefix %v -NextHop  %v -Verbose", route.linkIndex, route.destinationSubnet.String(), existingRoutes[0].gatewayAddress.String())
-				_, err := runScript(removeRouteCmdLine)
+				log.Warningf("Replacing existing route to %v via %v with %v via %v.", evt.Lease.Subnet, existingRoutes[0].GatewayAddress, evt.Lease.Subnet, evt.Lease.Attrs.PublicIP)
+				err := nr.RemoveNetRoute(route.LinkIndex, route.DestinationSubnet, existingRoutes[0].GatewayAddress)
 				if err != nil {
 					log.Errorf("Error removing route: %v", err)
 					continue
 				}
 			}
 
-			newRouteCmdLine := fmt.Sprintf("new-netroute -InterfaceIndex %v -DestinationPrefix %v -NextHop  %v -Verbose", route.linkIndex, route.destinationSubnet.String(), route.gatewayAddress.String())
-			_, err := runScript(newRouteCmdLine)
+			err := nr.NewNetRoute(route.LinkIndex, route.DestinationSubnet, route.GatewayAddress)
 			if err != nil {
 				log.Errorf("Error creating route: %v", err)
 			}
@@ -144,18 +126,16 @@ func (n *network) handleSubnetEvents(batch []subnet.Event) {
 				continue
 			}
 
-			route := route{
-				destinationSubnet: evt.Lease.Subnet.ToIPNet(),
-				gatewayAddress:    evt.Lease.Attrs.PublicIP.ToIP(),
-				linkIndex:         n.linkIndex,
+			route := netroute.Route{
+				DestinationSubnet: evt.Lease.Subnet.ToIPNet(),
+				GatewayAddress:    evt.Lease.Attrs.PublicIP.ToIP(),
+				LinkIndex:         n.linkIndex,
 			}
 
-			getRouteCmdLine := fmt.Sprint("get-netroute -InterfaceIndex %v -DestinationPrefix %v -erroraction Ignore", route.linkIndex, route.destinationSubnet.String())
-			stdout, _ := runScript(getRouteCmdLine)
+			existingRoutes, _ := nr.GetNetRoutes(route.LinkIndex, route.DestinationSubnet)
 
-			if stdout != "" {
-				removeRouteCmdLine := fmt.Sprint("remove-netroute -InterfaceIndex %v -DestinationPrefix %v -NextHop  %v -Verbose", route.linkIndex, route.destinationSubnet.String(), route.gatewayAddress.String())
-				_, err := runScript(removeRouteCmdLine)
+			if existingRoutes != nil {
+				err := nr.RemoveNetRoute(route.LinkIndex, route.DestinationSubnet, route.GatewayAddress)
 				if err != nil {
 					log.Errorf("Error removing route: %v", err)
 				}
@@ -169,18 +149,18 @@ func (n *network) handleSubnetEvents(batch []subnet.Event) {
 	}
 }
 
-func (n *network) addToRouteList(route route) {
+func (n *network) addToRouteList(route netroute.Route) {
 	for _, r := range n.rl {
-		if routeEqual(r, route) {
+		if r.Equal(route) {
 			return
 		}
 	}
 	n.rl = append(n.rl, route)
 }
 
-func (n *network) removeFromRouteList(route route) {
+func (n *network) removeFromRouteList(route netroute.Route) {
 	for index, r := range n.rl {
-		if routeEqual(r, route) {
+		if r.Equal(route) {
 			n.rl = append(n.rl[:index], n.rl[index+1:]...)
 			return
 		}
@@ -199,101 +179,30 @@ func (n *network) routeCheck(ctx context.Context) {
 }
 
 func (n *network) checkSubnetExistInRoutes() {
-	getRouteCmdLine := "get-netroute -erroraction Ignore"
-	stdout, err := runScript(getRouteCmdLine)
+	nr := netroute.New()
+	defer nr.Exit()
+
+	currentRoutes, err := nr.GetNetRoutesAll()
 	if err != nil {
 		log.Errorf("Error enumerating routes", err)
 		return
 	}
-	currentRoutes := parseRoutesList(stdout)
 	for _, r := range n.rl {
 		exist := false
 		for _, currentRoute := range currentRoutes {
-			if routeEqual(r, currentRoute) {
+			if r.Equal(currentRoute) {
 				exist = true
 				break
 			}
 		}
 
 		if !exist {
-			newRouteCmdLine := fmt.Sprintf("new-netroute -InterfaceIndex %v -DestinationPrefix %v -NextHop  %v -Verbose", r.linkIndex, r.destinationSubnet.String(), r.gatewayAddress.String())
-			_, err := runScript(newRouteCmdLine)
+			err := nr.NewNetRoute(r.LinkIndex, r.DestinationSubnet, r.GatewayAddress)
 			if err != nil {
-				log.Errorf("Error recovering route %v (%v)", newRouteCmdLine, err)
+				log.Errorf("Error recovering route to %v via %v on %v (%v).", r.DestinationSubnet, r.GatewayAddress, r.LinkIndex, err)
 				continue
 			}
-			log.Errorf("Recovered route %v", newRouteCmdLine)
+			log.Warningf("Error recovering route to %v via %v on %v.", r.DestinationSubnet, r.GatewayAddress, r.LinkIndex)
 		}
 	}
-}
-
-func parseRoutesList(stdout string) []route {
-	internalWhitespaceRegEx := regexp.MustCompile(`[\s\p{Zs}]{2,}`)
-	scanner := bufio.NewScanner(strings.NewReader(stdout))
-	var routes []route
-	for scanner.Scan() {
-		line := internalWhitespaceRegEx.ReplaceAllString(scanner.Text(), "|")
-		if strings.HasPrefix(line, "ifIndex") || strings.HasPrefix(line, "----") {
-			continue
-		}
-
-		parts := strings.Split(line, "|")
-		if len(parts) != 5 {
-			continue
-		}
-
-		linkIndex, err := strconv.Atoi(parts[0])
-		if err != nil {
-			continue
-		}
-
-		gatewayAddress := net.ParseIP(parts[2])
-		if gatewayAddress == nil {
-			continue
-		}
-
-		_, destinationSubnet, err := net.ParseCIDR(parts[1])
-		if err != nil {
-			continue
-		}
-		route := route{
-			destinationSubnet: destinationSubnet,
-			gatewayAddress:    gatewayAddress,
-			linkIndex:         linkIndex,
-		}
-
-		routes = append(routes, route)
-	}
-
-	return routes
-}
-
-func routeEqual(x, y route) bool {
-	if x.destinationSubnet.IP.Equal(y.destinationSubnet.IP) && x.gatewayAddress.Equal(y.gatewayAddress) && bytes.Equal(x.destinationSubnet.Mask, y.destinationSubnet.Mask) {
-		return true
-	}
-
-	return false
-}
-
-func runScript(cmdLine string) (string, error) {
-	// choose a PS backend
-	back := &psbe.Local{}
-
-	// start a local powershell process
-	shell, err := ps.New(back)
-	if err != nil {
-		return "", err
-	}
-	defer shell.Exit()
-
-	log.Infof("Executing: %v", cmdLine)
-	stdout, stderr, err := shell.Execute(cmdLine)
-	if err != nil {
-		return "", err
-	}
-
-	log.Infof("stdout [%v], stderr [%v]", stdout, stderr)
-
-	return stdout, nil
 }
