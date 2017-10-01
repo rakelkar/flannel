@@ -202,7 +202,7 @@ func (n *network) checkSubnetExistInRoutes() {
 				log.Errorf("Error recovering route to %v via %v on %v (%v).", r.DestinationSubnet, r.GatewayAddress, r.LinkIndex, err)
 				continue
 			}
-			log.Warningf("Error recovering route to %v via %v on %v.", r.DestinationSubnet, r.GatewayAddress, r.LinkIndex)
+			log.Errorf("Recovered route to %v via %v on %v.", r.DestinationSubnet, r.GatewayAddress, r.LinkIndex)
 		}
 	}
 }
