@@ -23,6 +23,10 @@ import (
 	"github.com/coreos/flannel/pkg/ip"
 	"github.com/coreos/flannel/subnet"
 	"golang.org/x/net/context"
+	"github.com/Microsoft/hcsshim"
+	"k8s.io/apimachinery/pkg/util/json"
+	"github.com/golang/glog"
+	"strings"
 )
 
 func init() {
@@ -37,6 +41,10 @@ type HostgwBackend struct {
 	sm       subnet.Manager
 	extIface *backend.ExternalInterface
 	networks map[string]*network
+}
+
+type cniConf struct {
+	WindowsDelegate map[string]interface{} `json:"windowsDelegate"`
 }
 
 func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backend, error) {
@@ -78,6 +86,117 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 		return nil, fmt.Errorf("failed to acquire lease: %v", err)
 	}
 
-	/* NB: docker will create the local route to `sn` */
+	// for windows we need to create the HNS network here (as it resets the interface)
+	// so we need a name. Since it must match the CNI config name, we default to cbr0
+	backendConfig := struct {
+		networkName   string
+		dnsServerList string
+	}{
+		networkName: "cbr0",
+	}
+
+	if len(config.Backend) > 0 {
+		if err := json.Unmarshal(config.Backend, &backendConfig); err != nil {
+			return nil, fmt.Errorf("error decoding windows HOST-GW backend config: %v", err)
+		}
+	}
+
+	if backendConfig.networkName == "" {
+		return nil, fmt.Errorf("Backend.networkName is required e.g. cbr0")
+	}
+
+	// check if the network exists and has the expected settings?
+	var networkId string
+	createNetwork := true
+	addressPrefix := n.lease.Subnet.String()
+	gatewayAddress := n.lease.Subnet.IP + 2
+	hnsNetwork, err := hcsshim.GetHNSNetworkByName(backendConfig.networkName)
+	if err == nil && hnsNetwork.DNSServerList == backendConfig.dnsServerList {
+		for _, subnet := range hnsNetwork.Subnets {
+			if subnet.AddressPrefix == addressPrefix && subnet.GatewayAddress == gatewayAddress.String() {
+				networkId = hnsNetwork.Id
+				createNetwork = false
+				glog.Infof("Found existing HNS network [%v]", hnsNetwork.Name)
+				break
+			}
+		}
+	}
+
+	if createNetwork {
+		// create, but a network with the same name exists?
+		if hnsNetwork != nil {
+			if _, err := hnsNetwork.Delete(); err != nil {
+				return nil, fmt.Errorf("unable to delete existing network [%v], error: %v", hnsNetwork.Name, err)
+			}
+			glog.Infof("Deleted stale HNS network [%v]")
+		}
+
+		// create the underlying windows HNS network
+		request := map[string]interface{}{
+			"Name": backendConfig.networkName,
+			"Type": "l2bridge",
+			"Subnets": []interface{}{
+				map[string]interface{}{
+					"AddressPrefix": addressPrefix,
+					"GatewayAddress": gatewayAddress,
+				},
+			},
+			"DNSServerList": backendConfig.dnsServerList,
+		}
+
+		jsonRequest, err := json.Marshal(request)
+		if err != nil {
+			return nil, err
+		}
+
+		hnsNetwork, err := hcsshim.HNSNetworkRequest("POST", "", string(jsonRequest))
+		if err != nil {
+			return nil, fmt.Errorf("unable to create network [%v], error: %v", backendConfig.networkName, err)
+		}
+		networkId = hnsNetwork.Id
+		glog.Infof("Created HNS network [%v] as %+v", backendConfig.networkName, hnsNetwork)
+	}
+
+	// now ensure there is a 1.2 endpoint on this network in the host compartment
+	var endpointToAttach *hcsshim.HNSEndpoint
+	bridgeEndpointName := backendConfig.networkName + "_ep"
+	createEndpoint := true
+	hnsEndpoint, err := hcsshim.GetHNSEndpointByName(bridgeEndpointName)
+	if err == nil && hnsEndpoint.IPAddress.String() == gatewayAddress.String() {
+		endpointToAttach = hnsEndpoint
+		createEndpoint = false
+	}
+
+	if createEndpoint {
+		if hnsEndpoint != nil {
+			if _, err = hnsEndpoint.Delete(); err != nil {
+				return nil, fmt.Errorf("unable to delete existing bridge endpoint [%v], error: %v", bridgeEndpointName, err)
+			}
+			glog.Infof("Deleted stale HNS endpoint [%v]")
+		}
+
+		hnsEndpoint = &hcsshim.HNSEndpoint {
+			Id             : "",
+			Name           : bridgeEndpointName,
+			IPAddress      : gatewayAddress.ToIP(),
+			GatewayAddress : "0.0.0.0",
+			VirtualNetwork : networkId,
+		}
+
+		endpointToAttach = hnsEndpoint
+		glog.Infof("Attempting to create HNS endpoint [%+v]", hnsEndpoint)
+		hnsEndpoint, err = hnsEndpoint.Create()
+		if err != nil && !strings.Contains(err.Error(), "The object already exists") {
+			return nil, fmt.Errorf("unable to create bridge endpoint [%v], error: %v", bridgeEndpointName, err)
+		}
+		glog.Infof("Created bridge endpoint [%v] as %+v", bridgeEndpointName, hnsEndpoint)
+	}
+
+	if err = endpointToAttach.ContainerHotAttach("1"); err != nil {
+		return nil, fmt.Errorf("unable to hot attaach bridge endpoint [%v] to host compartment, error: %v", bridgeEndpointName, err)
+	}
+
+	glog.Infof("Attached bridge endpoint [%v] to host", bridgeEndpointName)
+
 	return n, nil
 }
