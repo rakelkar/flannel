@@ -26,7 +26,6 @@ import (
 	"github.com/Microsoft/hcsshim"
 	"k8s.io/apimachinery/pkg/util/json"
 	"github.com/golang/glog"
-	"strings"
 )
 
 func init() {
@@ -109,14 +108,15 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	var networkId string
 	createNetwork := true
 	addressPrefix := n.lease.Subnet.String()
-	gatewayAddress := n.lease.Subnet.IP + 2
+	networkGatewayAddress := n.lease.Subnet.IP + 1
+	podGatewayAddress := n.lease.Subnet.IP + 2
 	hnsNetwork, err := hcsshim.GetHNSNetworkByName(backendConfig.networkName)
 	if err == nil && hnsNetwork.DNSServerList == backendConfig.dnsServerList {
 		for _, subnet := range hnsNetwork.Subnets {
-			if subnet.AddressPrefix == addressPrefix && subnet.GatewayAddress == gatewayAddress.String() {
+			if subnet.AddressPrefix == addressPrefix && subnet.GatewayAddress == networkGatewayAddress.String() {
 				networkId = hnsNetwork.Id
 				createNetwork = false
-				glog.Infof("Found existing HNS network [%v]", hnsNetwork.Name)
+				glog.Infof("Found existing HNS network [%+v]", hnsNetwork)
 				break
 			}
 		}
@@ -137,8 +137,8 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 			"Type": "l2bridge",
 			"Subnets": []interface{}{
 				map[string]interface{}{
-					"AddressPrefix": addressPrefix,
-					"GatewayAddress": gatewayAddress,
+					"AddressPrefix":  addressPrefix,
+					"GatewayAddress": networkGatewayAddress,
 				},
 			},
 			"DNSServerList": backendConfig.dnsServerList,
@@ -149,6 +149,7 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 			return nil, err
 		}
 
+		glog.Infof("Attempting to create HNS network, request: %v", string(jsonRequest))
 		hnsNetwork, err := hcsshim.HNSNetworkRequest("POST", "", string(jsonRequest))
 		if err != nil {
 			return nil, fmt.Errorf("unable to create network [%v], error: %v", backendConfig.networkName, err)
@@ -162,7 +163,8 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	bridgeEndpointName := backendConfig.networkName + "_ep"
 	createEndpoint := true
 	hnsEndpoint, err := hcsshim.GetHNSEndpointByName(bridgeEndpointName)
-	if err == nil && hnsEndpoint.IPAddress.String() == gatewayAddress.String() {
+	if err == nil && hnsEndpoint.IPAddress.String() == podGatewayAddress.String() {
+		glog.Infof("Found existing HNS bridge endpoint [%+v]", hnsEndpoint)
 		endpointToAttach = hnsEndpoint
 		createEndpoint = false
 	}
@@ -178,22 +180,21 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 		hnsEndpoint = &hcsshim.HNSEndpoint {
 			Id             : "",
 			Name           : bridgeEndpointName,
-			IPAddress      : gatewayAddress.ToIP(),
-			GatewayAddress : "0.0.0.0",
+			IPAddress      : podGatewayAddress.ToIP(),
 			VirtualNetwork : networkId,
 		}
 
-		endpointToAttach = hnsEndpoint
 		glog.Infof("Attempting to create HNS endpoint [%+v]", hnsEndpoint)
 		hnsEndpoint, err = hnsEndpoint.Create()
-		if err != nil && !strings.Contains(err.Error(), "The object already exists") {
+		if err != nil {
 			return nil, fmt.Errorf("unable to create bridge endpoint [%v], error: %v", bridgeEndpointName, err)
 		}
+		endpointToAttach = hnsEndpoint
 		glog.Infof("Created bridge endpoint [%v] as %+v", bridgeEndpointName, hnsEndpoint)
 	}
 
-	if err = endpointToAttach.ContainerHotAttach("1"); err != nil {
-		return nil, fmt.Errorf("unable to hot attaach bridge endpoint [%v] to host compartment, error: %v", bridgeEndpointName, err)
+	if err = endpointToAttach.HostAttach(1); err != nil {
+		return nil, fmt.Errorf("unable to hot attach bridge endpoint [%v] to host compartment, error: %v", bridgeEndpointName, err)
 	}
 
 	glog.Infof("Attached bridge endpoint [%v] to host", bridgeEndpointName)
