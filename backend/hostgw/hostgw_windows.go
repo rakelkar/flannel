@@ -26,6 +26,7 @@ import (
 	"github.com/Microsoft/hcsshim"
 	"k8s.io/apimachinery/pkg/util/json"
 	"github.com/golang/glog"
+	netsh "github.com/rakelkar/gonetsh/netsh"
 )
 
 func init() {
@@ -196,8 +197,23 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	if err = endpointToAttach.HostAttach(1); err != nil {
 		return nil, fmt.Errorf("unable to hot attach bridge endpoint [%v] to host compartment, error: %v", bridgeEndpointName, err)
 	}
-
 	glog.Infof("Attached bridge endpoint [%v] to host", bridgeEndpointName)
+
+
+	// enable forwarding on the host interface and endpoint
+	netHelper := netsh.New(nil)
+	for _, interfaceIpAddress := range []string{hnsNetwork.ManagementIP, hnsEndpoint.IPAddress.String()} {
+		netInterface, err := netHelper.GetInterfaceByIP(interfaceIpAddress)
+		if err != nil {
+			return nil, fmt.Errorf("unable to find interface for IP Addess [%v], error: %v", interfaceIpAddress, err)
+		}
+
+		interfaceName := netInterface.Name
+		if err:= netHelper.EnableForwarding(interfaceName); err != nil {
+			return nil, fmt.Errorf("unable to enable forwarding on [%v], error: %v", interfaceName, err)
+		}
+		glog.Infof("Enabled forwarding on [%v]", interfaceName)
+	}
 
 	return n, nil
 }
