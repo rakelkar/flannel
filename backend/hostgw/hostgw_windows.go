@@ -19,14 +19,14 @@ package hostgw
 import (
 	"fmt"
 
+	"github.com/Microsoft/hcsshim"
 	"github.com/coreos/flannel/backend"
 	"github.com/coreos/flannel/pkg/ip"
 	"github.com/coreos/flannel/subnet"
-	"golang.org/x/net/context"
-	"github.com/Microsoft/hcsshim"
-	"k8s.io/apimachinery/pkg/util/json"
 	"github.com/golang/glog"
 	netsh "github.com/rakelkar/gonetsh/netsh"
+	"golang.org/x/net/context"
+	"k8s.io/apimachinery/pkg/util/json"
 )
 
 func init() {
@@ -178,11 +178,11 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 			glog.Infof("Deleted stale HNS endpoint [%v]")
 		}
 
-		hnsEndpoint = &hcsshim.HNSEndpoint {
-			Id             : "",
-			Name           : bridgeEndpointName,
-			IPAddress      : podGatewayAddress.ToIP(),
-			VirtualNetwork : networkId,
+		hnsEndpoint = &hcsshim.HNSEndpoint{
+			Id:             "",
+			Name:           bridgeEndpointName,
+			IPAddress:      podGatewayAddress.ToIP(),
+			VirtualNetwork: networkId,
 		}
 
 		glog.Infof("Attempting to create HNS endpoint [%+v]", hnsEndpoint)
@@ -199,7 +199,6 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	}
 	glog.Infof("Attached bridge endpoint [%v] to host", bridgeEndpointName)
 
-
 	// enable forwarding on the host interface and endpoint
 	netHelper := netsh.New(nil)
 	for _, interfaceIpAddress := range []string{hnsNetwork.ManagementIP, hnsEndpoint.IPAddress.String()} {
@@ -209,7 +208,7 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 		}
 
 		interfaceName := netInterface.Name
-		if err:= netHelper.EnableForwarding(interfaceName); err != nil {
+		if err := netHelper.EnableForwarding(interfaceName); err != nil {
 			return nil, fmt.Errorf("unable to enable forwarding on [%v], error: %v", interfaceName, err)
 		}
 		glog.Infof("Enabled forwarding on [%v]", interfaceName)
