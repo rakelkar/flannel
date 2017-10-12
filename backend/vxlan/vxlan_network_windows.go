@@ -25,16 +25,18 @@ import (
 	"github.com/coreos/flannel/backend"
 	"github.com/coreos/flannel/subnet"
 
-	"github.com/coreos/flannel/pkg/ip"
+	"encoding/json"
 	"fmt"
 	"github.com/Microsoft/hcsshim"
+	"github.com/coreos/flannel/pkg/ip"
 	"net"
-	"encoding/json"
+	"time"
 )
 
 type network struct {
 	name      string
 	networkId string
+	macPrefix string
 	extIface  *backend.ExternalInterface
 	lease     *subnet.Lease
 	sm        subnet.Manager
@@ -72,9 +74,9 @@ func (n *network) Run(ctx context.Context) {
 	}
 }
 
-func conjureMac(ip ip.IP4) string {
-	a,b,c,d := ip.Octets()
-	return fmt.Sprintf("0E-2A-%#0x-%#0x-%#0x-%#0x", a, b, c, d)
+func conjureMac(macPrefix string, ip ip.IP4) string {
+	a, b, c, d := ip.Octets()
+	return fmt.Sprintf("%v-%02x-%02x-%02x-%02x", macPrefix, a, b, c, d)
 }
 
 func (n *network) handleSubnetEvents(batch []subnet.Event) {
@@ -90,37 +92,66 @@ func (n *network) handleSubnetEvents(batch []subnet.Event) {
 		}
 
 		// add or delete all possible remote IPs (excluding gateway & bcast) as remote endpoints
-		managementIp := n.extIface.IfaceAddr.String()
+		managementIp := evt.Lease.Attrs.PublicIP.String()
 		lastIP := evt.Lease.Subnet.Next().IP - 1
+
+		start := time.Now()
 		for remoteIp := evt.Lease.Subnet.IP + 2; remoteIp < lastIP; remoteIp++ {
-			remoteMac := conjureMac(remoteIp)
+			remoteMac := conjureMac(n.macPrefix, remoteIp)
 			remoteEndpointName := fmt.Sprintf("remote_%v", remoteIp.String())
 
-			switch evt.Type {
-			case subnet.EventAdded:
-				log.Infof("Subnet added: %v", evt.Lease.Subnet)
-				createRemoteEndpoint(remoteEndpointName, remoteIp, remoteMac, managementIp, n.networkId)
-
-			case subnet.EventRemoved:
-				log.Info("Subnet removed: ", evt.Lease.Subnet)
+			if evt.Type == subnet.EventAdded {
+				if err := createRemoteEndpoint(remoteEndpointName, remoteIp, remoteMac, managementIp, n.networkId); err != nil {
+					log.Errorf("failed to create remote endpoint [%v], error: %v", remoteEndpointName, err)
+				}
+			} else {
 				if hnsEndpoint, err := hcsshim.GetHNSEndpointByName(remoteEndpointName); err != nil {
 					if _, err := hnsEndpoint.Delete(); err != nil {
 						log.Errorf("unable to delete existing remote endpoint [%v], error: %v", remoteEndpointName, err)
 					}
 				}
+			}
+		}
 
-			default:
-				break
+		t := time.Now()
+		elapsed := t.Sub(start)
+
+		message := "Subnet removed"
+		if evt.Type == subnet.EventAdded {
+			message = "Subnet added"
+		}
+		log.Infof("%v: %v [%v ns]", message, evt.Lease.Subnet, elapsed.Nanoseconds())
+	}
+}
+
+func checkPAAddress(hnsEndpoint *hcsshim.HNSEndpoint, managementAddress string) bool {
+	if hnsEndpoint.Policies == nil {
+		return false
+	}
+
+	for _, policyJson := range hnsEndpoint.Policies {
+		var policy map[string]interface{}
+		if json.Unmarshal(policyJson, &policy) != nil {
+			return false
+		}
+
+		if valType, ok := policy["Type"]; ok && valType.(string) == "PA" {
+			if val, ok := policy["PA"]; ok {
+				if val.(string) == managementAddress {
+					return true
+				}
 			}
 		}
 	}
+
+	return false
 }
 
 func createRemoteEndpoint(remoteEndpointName string, remoteIp ip.IP4, remoteMac string, managementAddress string, networkId string) error {
 
 	// find existing
 	hnsEndpoint, err := hcsshim.GetHNSEndpointByName(remoteEndpointName)
-	if err == nil && hnsEndpoint.VirtualNetwork  == networkId {
+	if err == nil && hnsEndpoint.VirtualNetwork == networkId && checkPAAddress(hnsEndpoint, managementAddress) {
 		return nil
 	}
 
@@ -133,8 +164,8 @@ func createRemoteEndpoint(remoteEndpointName string, remoteIp ip.IP4, remoteMac 
 	}
 
 	paPolicy := struct {
-		Type           string
-		PA          string
+		Type string
+		PA   string
 	}{
 		Type: "PA",
 		PA:   managementAddress,
@@ -143,11 +174,11 @@ func createRemoteEndpoint(remoteEndpointName string, remoteIp ip.IP4, remoteMac 
 	policyBytes, _ := json.Marshal(&paPolicy)
 
 	hnsEndpoint = &hcsshim.HNSEndpoint{
-		Id:             "",
-		Name:           remoteEndpointName,
-		IPAddress:      net.IPv4(remoteIp.Octets()),
-		MacAddress:     remoteMac,
-		VirtualNetwork: networkId,
+		Id:               "",
+		Name:             remoteEndpointName,
+		IPAddress:        net.IPv4(remoteIp.Octets()),
+		MacAddress:       remoteMac,
+		VirtualNetwork:   networkId,
 		IsRemoteEndpoint: true,
 		Policies: []json.RawMessage{
 			policyBytes,

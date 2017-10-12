@@ -33,10 +33,11 @@ import (
 
 	"golang.org/x/net/context"
 
+	"errors"
+	"github.com/Microsoft/hcsshim"
 	"github.com/coreos/flannel/backend"
 	"github.com/coreos/flannel/pkg/ip"
 	"github.com/coreos/flannel/subnet"
-	"github.com/Microsoft/hcsshim"
 )
 
 func init() {
@@ -44,23 +45,15 @@ func init() {
 }
 
 const (
-	defaultVNI = 1
+	minimumVNI = 4096
+	vxlanPort  = 4789
 )
 
 type VXLANBackend struct {
-	sm subnet.Manager
-	extIface  *backend.ExternalInterface
+	sm       subnet.Manager
+	extIface *backend.ExternalInterface
 	networks map[string]*network
 }
-
-func init() {
-	backend.Register("host-gw", New)
-}
-
-const (
-	routeCheckRetries = 10
-)
-
 
 func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backend, error) {
 
@@ -76,12 +69,17 @@ func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backen
 func (be *VXLANBackend) RegisterNetwork(ctx context.Context, config *subnet.Config) (backend.Network, error) {
 	// TODO: are these used? how to pass to HNS?
 	cfg := struct {
+		name          string
+		macPrefix     string
 		VNI           int
 		Port          int
 		GBP           bool
 		DirectRouting bool
 	}{
-		VNI: defaultVNI,
+		name:      "vxlan0",
+		VNI:       minimumVNI,
+		Port:      vxlanPort,
+		macPrefix: "0E-2A",
 	}
 
 	if len(config.Backend) > 0 {
@@ -89,12 +87,34 @@ func (be *VXLANBackend) RegisterNetwork(ctx context.Context, config *subnet.Conf
 			return nil, fmt.Errorf("error decoding VXLAN backend config: %v", err)
 		}
 	}
-	log.Infof("VXLAN config: VNI=%d Port=%d GBP=%v DirectRouting=%v", cfg.VNI, cfg.Port, cfg.GBP, cfg.DirectRouting)
+
+	if cfg.VNI < minimumVNI {
+		return nil, fmt.Errorf("invalid VXLAN backend config. VNI [%v] must be greater than or equal to %v on Windows", cfg.VNI, minimumVNI)
+	}
+
+	if cfg.Port != vxlanPort {
+		return nil, fmt.Errorf("invalid VXLAN backend config. Port [%v] is not supported on Windows. Omit the setting to default to port %v", cfg.Port, vxlanPort)
+	}
+
+	if cfg.DirectRouting == true {
+		return nil, errors.New("invalid VXLAN backend config. DirectRouting is not supported on Windows")
+	}
+
+	if cfg.GBP == true {
+		return nil, errors.New("invalid VXLAN backend config. GBP is not supported on Windows")
+	}
+
+	if cfg.macPrefix == "" || len(cfg.macPrefix) != 5 || cfg.macPrefix[2] != '-' {
+		return nil, fmt.Errorf("invalid VXLAN backend config. macPrefix [%v] is invalid, prefix must be of the format xx-xx e.g. 0E-2A", cfg.macPrefix)
+	}
+
+	log.Infof("VXLAN config: %+v", cfg)
 
 	n := &network{
 		extIface:  be.extIface,
 		sm:        be.sm,
 		name:      be.extIface.Iface.Name,
+		macPrefix: cfg.macPrefix,
 	}
 
 	attrs := subnet.LeaseAttrs{
@@ -115,12 +135,12 @@ func (be *VXLANBackend) RegisterNetwork(ctx context.Context, config *subnet.Conf
 	}
 
 	// check if the network exists and has the expected settings?
-	networkName := fmt.Sprintf("flannel.%v", cfg.VNI)
+	networkName := cfg.name
 	createNetwork := true
 	addressPrefix := config.Network
 	networkGatewayAddress := config.Network.IP + 1
 	hnsNetwork, err := hcsshim.GetHNSNetworkByName(networkName)
-	if err == nil && vsidMatches(hnsNetwork, cfg.VNI) {
+	if err == nil {
 		log.Infof("Found existing HNS network [%+v]", hnsNetwork)
 		n.networkId = hnsNetwork.Id
 		createNetwork = false
@@ -132,7 +152,7 @@ func (be *VXLANBackend) RegisterNetwork(ctx context.Context, config *subnet.Conf
 			if _, err := hnsNetwork.Delete(); err != nil {
 				return nil, fmt.Errorf("unable to delete existing network [%v], error: %v", hnsNetwork.Name, err)
 			}
-			log.Infof("Deleted stale HNS network [%v]")
+			log.Infof("Deleted stale HNS network [%v]", networkName)
 		}
 
 		// create the underlying windows HNS network
@@ -168,25 +188,4 @@ func (be *VXLANBackend) RegisterNetwork(ctx context.Context, config *subnet.Conf
 	}
 
 	return n, nil
-}
-
-func vsidMatches(network *hcsshim.HNSNetwork, vsid int) bool {
-	if network == nil || len(network.Policies) < 1 {
-		return false
-	}
-
-	for _, policyJson := range network.Policies {
-		vsidPolicy := struct {
-			Type          string
-			VSID          int
-		}{}
-
-		if err := json.Unmarshal(policyJson, &vsidPolicy); err == nil {
-			if vsidPolicy.Type == "VSID" && vsidPolicy.VSID == vsid {
-				return true
-			}
-		}
-	}
-
-	return false
 }
