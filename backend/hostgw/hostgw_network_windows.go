@@ -1,4 +1,4 @@
-// +build linux
+// +build windows
 
 // Copyright 2015 flannel authors
 //
@@ -13,21 +13,35 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// +build !amd64
 
-package udp
+package hostgw
 
 import (
-	"fmt"
+	"golang.org/x/net/context"
 
 	"github.com/coreos/flannel/backend"
 	"github.com/coreos/flannel/subnet"
+
+	netroute "github.com/rakelkar/gonetsh/netroute"
 )
 
-func init() {
-	backend.Register("udp", New)
+type network struct {
+	name      string
+	extIface  *backend.ExternalInterface
+	linkIndex int
+	rl        []netroute.Route
+	lease     *subnet.Lease
+	sm        subnet.Manager
 }
 
-func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backend, error) {
-	return nil, fmt.Errorf("UDP backend is not supported on this architecture")
+func (n *network) Lease() *subnet.Lease {
+	return n.lease
+}
+
+func (n *network) MTU() int {
+	return n.extIface.Iface.MTU
+}
+
+func (n *network) Run(ctx context.Context) {
+
 }
