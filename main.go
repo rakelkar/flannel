@@ -54,6 +54,7 @@ import (
 	_ "github.com/coreos/flannel/backend/gce"
 	_ "github.com/coreos/flannel/backend/hostgw"
 	_ "github.com/coreos/flannel/backend/ipip"
+	_ "github.com/coreos/flannel/backend/ipsec"
 	_ "github.com/coreos/flannel/backend/udp"
 	_ "github.com/coreos/flannel/backend/vxlan"
 	"github.com/coreos/go-systemd/daemon"
@@ -92,6 +93,9 @@ type CmdLineOpts struct {
 	subnetLeaseRenewMargin int
 	healthzIP              string
 	healthzPort            int
+	charonExecutablePath   string
+	charonViciUri          string
+	iptablesResyncSeconds  int
 }
 
 var (
@@ -121,6 +125,7 @@ func init() {
 	flannelFlags.BoolVar(&opts.version, "version", false, "print version and exit")
 	flannelFlags.StringVar(&opts.healthzIP, "healthz-ip", "0.0.0.0", "the IP address for healthz server to listen")
 	flannelFlags.IntVar(&opts.healthzPort, "healthz-port", 0, "the port for healthz server to listen(0 to disable)")
+	flannelFlags.IntVar(&opts.iptablesResyncSeconds, "iptables-resyc", 5, "resync period for iptables rules, in seconds")
 
 	// glog will log to tmp files by default. override so all entries
 	// can flow into journald (if running under systemd)
@@ -275,7 +280,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	bn, err := be.RegisterNetwork(ctx, config)
+	bn, err := be.RegisterNetwork(ctx, wg, config)
 	if err != nil {
 		log.Errorf("Error registering network: %s", err)
 		cancel()
@@ -285,13 +290,13 @@ func main() {
 
 	// Set up ipMasq if needed
 	if opts.ipMasq {
-		go network.SetupAndEnsureIPTables(network.MasqRules(config.Network, bn.Lease()))
+		go network.SetupAndEnsureIPTables(network.MasqRules(config.Network, bn.Lease()), opts.iptablesResyncSeconds)
 	}
 
 	// Always enables forwarding rules. This is needed for Docker versions >1.13 (https://docs.docker.com/engine/userguide/networking/default_network/container-communication/#container-communication-between-hosts)
 	// In Docker 1.12 and earlier, the default FORWARD chain policy was ACCEPT.
 	// In Docker 1.13 and later, Docker sets the default policy of the FORWARD chain to DROP.
-	go network.SetupAndEnsureIPTables(network.ForwardRules(config.Network.String()))
+	go network.SetupAndEnsureIPTables(network.ForwardRules(config.Network.String()), opts.iptablesResyncSeconds)
 
 	if err := WriteSubnetFile(opts.subnetFile, config.Network, opts.ipMasq, bn); err != nil {
 		// Continue, even though it failed.
@@ -469,7 +474,13 @@ func LookupExtIface(ifname string, ifregex string) (*backend.ExternalInterface, 
 
 		// Check that nothing was matched
 		if iface == nil {
-			return nil, fmt.Errorf("Could not match pattern %s to any of the available network interfaces", ifregex)
+			var availableFaces []string
+			for _, f := range ifaces {
+				ip, _ := ip.GetIfaceIP4Addr(&f) // We can safely ignore errors. We just won't log any ip
+				availableFaces = append(availableFaces, fmt.Sprintf("%s:%s", f.Name, ip))
+			}
+
+			return nil, fmt.Errorf("Could not match pattern %s to any of the available network interfaces (%s)", ifregex, strings.Join(availableFaces, ", "))
 		}
 	} else {
 		log.Info("Determining IP address of default interface")
