@@ -199,13 +199,11 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, wg sync.WaitGroup,
 	// enable forwarding on the host interface and endpoint
 	netHelper := netsh.New(nil)
 	for _, interfaceIpAddress := range []string{hnsNetwork.ManagementIP, endpointToAttach.IPAddress.String()} {
-		glog.Infof("Searching for interface with IP: %v", interfaceIpAddress)
 		netInterface, err := netHelper.GetInterfaceByIP(interfaceIpAddress)
 		if err != nil {
 			return nil, fmt.Errorf("unable to find interface for IP Addess [%v], error: %v", interfaceIpAddress, err)
 		}
 
-		glog.Infof("Found interface with index %d", netInterface.Idx)
 		interfaceIdx := strconv.Itoa(netInterface.Idx)
 		if err := netHelper.EnableForwarding(interfaceIdx); err != nil {
 			return nil, fmt.Errorf("unable to enable forwarding on [%v] index [%v], error: %v", netInterface.Name, interfaceIdx, err)

@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-
+	"sync"	
+	
 	utilexec "k8s.io/utils/exec"
 	"errors"
 )
@@ -83,11 +83,11 @@ func (runner *runner) GetInterfaces() ([]Ipv4Interface, error) {
 	}
 
 	// zip them up
-	for _, inter := range interfaces {
+	for i, inter := range interfaces {
 		name := inter.Name
 
-		if val, ok := indexMap[name]; ok {
-			inter.Idx = val
+		if val, ok := indexMap[name]; ok {			
+			interfaces[i].Idx = val			
 		} else {
 			return nil, fmt.Errorf("no index found for interface \"%v\"", name)
 		}
@@ -205,9 +205,10 @@ func (runner *runner) getNetworkInterfaceParameters() (map[string]int, error) {
 		// Split the line by two or more whitespace characters, returning all substrings (n < 0)
 		splitLine := reg.Split(line, -1)
 
-		name := splitLine[4]
+		name := splitLine[4]		
+		
 		if idx, err := strconv.Atoi(splitLine[0]); err == nil {
-			indexMap[name] = idx
+			indexMap[name] = idx			
 		}
 
 	}
