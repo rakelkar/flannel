@@ -19,6 +19,7 @@ package hostgw
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/Microsoft/hcsshim"
 	"github.com/coreos/flannel/backend"
@@ -58,7 +59,7 @@ func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backen
 	return be, nil
 }
 
-func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Config) (backend.Network, error) {
+func (be *HostgwBackend) RegisterNetwork(ctx context.Context, wg sync.WaitGroup, config *subnet.Config) (backend.Network, error) {
 	n := &network{
 		extIface:  be.extIface,
 		sm:        be.sm,
@@ -198,11 +199,13 @@ func (be *HostgwBackend) RegisterNetwork(ctx context.Context, config *subnet.Con
 	// enable forwarding on the host interface and endpoint
 	netHelper := netsh.New(nil)
 	for _, interfaceIpAddress := range []string{hnsNetwork.ManagementIP, endpointToAttach.IPAddress.String()} {
+		glog.Infof("Searching for interface with IP: %v", interfaceIpAddress)
 		netInterface, err := netHelper.GetInterfaceByIP(interfaceIpAddress)
 		if err != nil {
 			return nil, fmt.Errorf("unable to find interface for IP Addess [%v], error: %v", interfaceIpAddress, err)
 		}
 
+		glog.Infof("Found interface with index %d", netInterface.Idx)
 		interfaceIdx := strconv.Itoa(netInterface.Idx)
 		if err := netHelper.EnableForwarding(interfaceIdx); err != nil {
 			return nil, fmt.Errorf("unable to enable forwarding on [%v] index [%v], error: %v", netInterface.Name, interfaceIdx, err)
