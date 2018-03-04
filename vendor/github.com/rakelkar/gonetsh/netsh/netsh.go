@@ -147,14 +147,14 @@ func (runner *runner) getIpAddressConfigurations() ([]Ipv4Interface, error) {
 				if val, err := strconv.Atoi(value); err == nil {
 					currentInterface.GatewayMetric = val
 				}
-			} else if strings.HasPrefix(key, "Subnet Prefix") {
+			} else if strings.HasPrefix(key, "Subnet Prefix") && currentInterface.SubnetPrefix == 0 {
 				match := cidrPattern.FindStringSubmatch(value)
 				if val, err := strconv.Atoi(match[1]); err == nil {
 					currentInterface.SubnetPrefix = val
 				}
-			} else if strings.HasPrefix(key, "IP Address") {
+			} else if strings.HasPrefix(key, "IP Address") && currentInterface.IpAddress == ""  {
 				currentInterface.IpAddress = value
-			} else if strings.HasPrefix(key, "Default Gateway") {
+			} else if strings.HasPrefix(key, "Default Gateway") && currentInterface.DefaultGatewayAddress == "" {
 				currentInterface.DefaultGatewayAddress = value
 			}
 		}
